@@ -31,7 +31,7 @@ metadata:
   name: gh-agent-argocd
   namespace: self-hosted-runners
 roleRef:
-  kind: Role
+  kind: ClusterRole
   name: continuous-deployment
   apiGroup: rbac.authorization.k8s.io
 subjects:

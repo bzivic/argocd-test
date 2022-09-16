@@ -1,0 +1,86 @@
+name: buildContainer
+
+on: 
+  workflow_dispatch:
+    inputs:
+      buildName:
+        description: 'Build name to go in tag'
+        required: true
+        type: string
+      buildPath:
+        description: 'Path to Dockerfile or context'
+        default: '.'
+        required: true
+        type: string      
+      buildFile:
+        description: 'Path to Dockerfile or context'
+        default: 'Dockerfile'
+        required: false
+        type: string
+      repository:
+        description: 'Repo where image is being created'
+        required: false
+        type: string
+        default: github
+      cache:
+        description: 'Use Kaniko Cache'
+        required: false
+        type: string
+        default: kaniko-cache
+      environment:
+        description: 'Which environment'
+        required: true
+        type: string
+      role_arn:
+        description: 'Role to use'
+        required: false
+        type: string
+        default: arn:aws:iam::1234567879010:role/gha-github
+
+jobs:
+  push-image:
+    runs-on: [ self-hosted ]
+    environment: ${{ inputs.environment }}
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      build_name: ${{ steps.pass.outputs.build_name }}
+      build_tag: ${{ steps.pass.outputs.build_tag }}
+    env:
+      region: ap-southeast-2
+      BUILD_NAME: ${{ inputs.buildName }}-${{ github.run_id }}-${{ github.run_number }}-${{ github.ref_name }}
+      AWS_ROLE_ARN: ${{ inputs.role_arn }}
+      AWS_WEB_IDENTITY_TOKEN_FILE: /var/run/secrets/eks.amazonaws.com/serviceaccount/token
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      
+      - name: build image
+        id: build
+        working-directory: ${{ inputs.buildPath }}
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query 'Account' | tr -d '"')
+          ECR_PASS=$(aws ecr get-login-password --region ${{ env.region }})
+          BUILD_TAG="$ACCOUNT_ID.dkr.ecr.${{ env.region }}.amazonaws.com/${{ inputs.repository }}:${{ env.BUILD_NAME }}"
+          echo "::group::{Setting Outputs}"
+          echo '::set-output name=SELECTED_COLOR::green'
+          echo "::set-output name=account_id::$ACCOUNT_ID"       
+          echo "::set-output name=password::${ECR_PASS}"
+          echo "::add-mask::${ECR_PASS}"
+          echo "::set-output name=build_name::${{ env.BUILD_NAME }}"
+          echo "::set-output name=build_tag::$BUILD_TAG"
+          echo '{"credsStore": "ecr-login"}' > config.json
+          docker run -i --rm -v `pwd`:/workspace -v `pwd`/config.json:/kaniko/.docker/config.json:ro \
+            -e AWS_DEFAULT_REGION -e AWS_REGION -e AWS_ROLE_ARN -e AWS_WEB_IDENTITY_TOKEN_FILE \
+            -v $AWS_WEB_IDENTITY_TOKEN_FILE:$AWS_WEB_IDENTITY_TOKEN_FILE \
+            -v "/var/run/docker.sock":"/var/run/docker.sock" \
+            gcr.io/kaniko-project/executor:latest --dockerfile=${{ inputs.buildFile }} --destination=$BUILD_TAG --log-format=color --log-timestamp=true
+          #--cache-repo=$(KANIKO_CACHE)", "--cache=true", 
+            
+          #/usr/local/bin/docker run --label ${{ github.sha }} --workdir /github/workspace --rm -e region -e AWS_DEFAULT_REGION -e AWS_REGION -e INPUT_IMAGE -e INPUT_TAG -e INPUT_REGISTRY -e INPUT_BUILD_FILE -e INPUT_PATH -e INPUT_USERNAME -e INPUT_PASSWORD -e INPUT_CACHE -e INPUT_CACHE_REGISTRY -e INPUT_CACHE_TTL -e INPUT_CACHE_DIRECTORY -e INPUT_STRIP_TAG_PREFIX -e INPUT_EXTRA_ARGS -e INPUT_SKIP_UNCHANGED_DIGEST -e INPUT_TAG_WITH_LATEST -e INPUT_TARGET -e HOME -e GITHUB_JOB -e GITHUB_REF -e GITHUB_SHA -e GITHUB_REPOSITORY -e GITHUB_REPOSITORY_OWNER -e GITHUB_RUN_ID -e GITHUB_RUN_NUMBER -e GITHUB_RETENTION_DAYS -e GITHUB_RUN_ATTEMPT -e GITHUB_ACTOR -e GITHUB_WORKFLOW -e GITHUB_HEAD_REF -e GITHUB_BASE_REF -e GITHUB_EVENT_NAME -e GITHUB_SERVER_URL -e GITHUB_API_URL -e GITHUB_GRAPHQL_URL -e GITHUB_REF_NAME -e GITHUB_REF_PROTECTED -e GITHUB_REF_TYPE -e GITHUB_WORKSPACE -e GITHUB_ACTION -e GITHUB_EVENT_PATH -e GITHUB_ACTION_REPOSITORY -e GITHUB_ACTION_REF -e GITHUB_PATH -e GITHUB_ENV -e GITHUB_STEP_SUMMARY -e RUNNER_OS -e RUNNER_ARCH -e RUNNER_NAME -e RUNNER_TOOL_CACHE -e RUNNER_TEMP -e RUNNER_WORKSPACE -e ACTIONS_RUNTIME_URL -e ACTIONS_RUNTIME_TOKEN -e ACTIONS_CACHE_URL -e ACTIONS_ID_TOKEN_REQUEST_URL -e ACTIONS_ID_TOKEN_REQUEST_TOKEN -e GITHUB_ACTIONS=true -e CI=true -v "/var/run/docker.sock":"/var/run/docker.sock" -v "/runner/_work/_temp/_github_home":"/github/home" -v "/runner/_work/_temp/_github_workflow":"/github/workflow" -v "/runner/_work/_temp/_runner_file_commands":"/github/file_commands" -v "/runner/_work/Cloud-opal/Cloud-opal":"/github/workspace"
+          
+          ECR_IMAGES=$(aws ecr list-images --repository-name ${{ inputs.repository }} | jq '.imageIds | unique_by(.imageDigest) | length')
+          echo "::notice title=Image Count::$ECR_IMAGES"
+          echo "::notice title=Image Count::$ECR_IMAGES"
+          echo "::endgroup::"
